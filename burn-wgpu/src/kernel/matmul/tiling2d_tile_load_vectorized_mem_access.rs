@@ -6,17 +6,18 @@ use crate::{
     kernel::{build_info, KernelSettings, SourceTemplate, StaticKernel},
     kernel_wgsl,
     tensor::WgpuTensor,
+    WgpuBackend,
 };
 use burn_tensor::Shape;
 
 const MAX_SHARED_MEMORY_SIZE: usize = 8192;
 
 kernel_wgsl!(
-    MatmulTiling2DV2Raw,
-    "../../template/matmul/blocktiling_2d/v2.wgsl"
+    MatmulTiling2DTileLoadVectorizedMemAccessRaw,
+    "../../template/matmul/blocktiling_2d/tile_load_vectorized_mem_access.wgsl"
 );
 
-struct MatmulTiling2D<
+struct MatmulTiling2DTileLoadVectorizedMemAccess<
     const B_M: usize,
     const B_N: usize,
     const B_K: usize,
@@ -34,10 +35,19 @@ impl<
         const T_N: usize,
         const WORKGROUP_SIZE_X: usize,
         const WORKGROUP_SIZE_Y: usize,
-    > StaticKernel for MatmulTiling2D<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>
+    > StaticKernel
+    for MatmulTiling2DTileLoadVectorizedMemAccess<
+        B_M,
+        B_N,
+        B_K,
+        T_M,
+        T_N,
+        WORKGROUP_SIZE_X,
+        WORKGROUP_SIZE_Y,
+    >
 {
     fn source_template() -> SourceTemplate {
-        MatmulTiling2DV2Raw::source_template()
+        MatmulTiling2DTileLoadVectorizedMemAccessRaw::source_template()
             .register("b_m", B_M.to_string())
             .register("b_n", B_N.to_string())
             .register("b_k", B_K.to_string())
@@ -56,19 +66,19 @@ pub fn matmul_tiling_2d_default<E: WgpuElement, const D: usize>(
 ) -> WgpuTensor<E, D> {
     // Suppose a matmul of m1 of size [M, K] with m2 of size [K, N]
     // Block size along dim M
-    const B_M: usize = 128;
+    const B_M: usize = 64;
     // // Block size along dim N
-    const B_N: usize = 128;
+    const B_N: usize = 64;
     // // Block size along dim K
-    const B_K: usize = 8;
+    const B_K: usize = 32;
     // // Tiling size along dim M
-    const T_M: usize = 8;
+    const T_M: usize = 4;
     // // Tiling size along dim N
-    const T_N: usize = 8;
+    const T_N: usize = 4;
     // WORKGROUP_SIZE_X = ceil(B_M / T_M)
-    const WORKGROUP_SIZE_X: usize = 16;
+    const WORKGROUP_SIZE_X: usize = B_M / T_M;
     // WORKGROUP_SIZE_Y = ceil(B_N / T_N)
-    const WORKGROUP_SIZE_Y: usize = 16;
+    const WORKGROUP_SIZE_Y: usize = B_N / T_N;
 
     matmul_tiling_2d::<E, D, B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>(lhs, rhs)
 }
@@ -120,17 +130,33 @@ pub fn matmul_tiling_2d<
     shape_out[D - 1] = num_cols;
     let shape_out = Shape::new(shape_out);
 
-    let buffer = lhs
+    assert!(
+        num_rows % B_M == 0 && num_cols % B_N == 0 && lhs.shape.dims[D - 1] % B_K == 0,
+        "M, N, K must be divisible by B_M, B_N, B_K respectively in this version. "
+    );
+
+    // let lhs_t = WgpuBackend::transpose(lhs); TODO
+    let lhs_t = lhs.clone(); // for will never work, and won't even try if not square
+
+    let buffer = rhs
         .context
         .create_buffer(shape_out.num_elements() * core::mem::size_of::<E>());
-    let output = WgpuTensor::new(lhs.context.clone(), shape_out, buffer);
+    let output = WgpuTensor::new(rhs.context.clone(), shape_out, buffer);
 
     // set number of workgroups
     let blocks_needed_in_x = f32::ceil(num_rows as f32 / B_M as f32) as u32;
     let blocks_needed_in_y = f32::ceil(num_cols as f32 / B_N as f32) as u32;
 
-    let kernel = lhs.context.compile_static::<KernelSettings<
-        MatmulTiling2D<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>,
+    let kernel = rhs.context.compile_static::<KernelSettings<
+        MatmulTiling2DTileLoadVectorizedMemAccess<
+            B_M,
+            B_N,
+            B_K,
+            T_M,
+            T_N,
+            WORKGROUP_SIZE_X,
+            WORKGROUP_SIZE_Y,
+        >,
         E,
         i32,
         WORKGROUP_SIZE_X,
@@ -138,9 +164,9 @@ pub fn matmul_tiling_2d<
         1,
     >>();
 
-    let info = build_info(&[&lhs, &rhs, &output]);
+    let info = build_info(&[&lhs_t, &rhs, &output]);
 
-    let info_buffers = lhs
+    let info_buffers = rhs
         .context
         .create_buffer_with_data(bytemuck::cast_slice(&info));
 
@@ -154,7 +180,7 @@ pub fn matmul_tiling_2d<
     lhs.context.execute(
         workgroup,
         kernel,
-        &[&lhs.buffer, &rhs.buffer, &output.buffer, &info_buffers],
+        &[&lhs_t.buffer, &rhs.buffer, &output.buffer, &info_buffers],
     );
 
     output
@@ -169,23 +195,24 @@ mod tests {
         burn_tensor::Tensor<burn_ndarray::NdArrayBackend<f32>, D>;
 
     #[test]
-    pub fn test_matmul_tiling_2d_shapes_smaller_than_blocks() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_shapes_smaller_than_blocks_should_panic() {
         test_with_params::<128, 128, 16, 8, 8, 16, 16>(8, 8, 8, 1, 1);
     }
 
     #[test]
     pub fn test_matmul_tiling_2d_m_not_equals_n() {
-        test_with_params::<16, 16, 8, 8, 8, 2, 2>(8, 8, 3, 1, 1);
+        test_with_params::<16, 16, 8, 8, 8, 2, 2>(16, 8, 16, 1, 1);
     }
 
     #[test]
     pub fn test_matmul_tiling_2d_k_smaller_than_m_n() {
-        test_with_params::<16, 16, 8, 8, 8, 2, 2>(8, 3, 8, 1, 1);
+        test_with_params::<16, 16, 4, 8, 8, 2, 2>(16, 4, 16, 1, 1);
     }
 
     #[test]
     pub fn test_matmul_tiling_2d_k_larger_than_m_n() {
-        test_with_params::<16, 16, 8, 8, 8, 2, 2>(8, 48, 8, 1, 1);
+        test_with_params::<8, 8, 8, 8, 8, 1, 1>(8, 48, 8, 1, 1);
     }
 
     #[test]
@@ -195,23 +222,18 @@ mod tests {
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_small_parameters() {
-        test_with_params::<128, 128, 8, 8, 8, 16, 16>(8, 8, 8, 1, 1);
-    }
-
-    #[test]
     pub fn test_matmul_tiling_2d_bm_not_equals_bn() {
-        test_with_params::<32, 128, 8, 8, 8, 4, 16>(8, 8, 8, 1, 1);
+        test_with_params::<2, 4, 2, 2, 4, 1, 1>(8, 8, 8, 1, 1);
     }
 
     #[test]
     pub fn test_matmul_tiling_2d_multibatch_1_dim() {
-        test_with_params::<128, 128, 8, 8, 8, 16, 16>(8, 8, 8, 3, 1);
+        test_with_params::<8, 8, 8, 8, 8, 1, 1>(8, 8, 8, 3, 1);
     }
 
     #[test]
     pub fn test_matmul_tiling_2d_multibatch_2_dims() {
-        test_with_params::<128, 128, 8, 8, 8, 16, 16>(8, 8, 8, 3, 4);
+        test_with_params::<8, 8, 8, 8, 8, 1, 1>(8, 8, 8, 3, 4);
     }
 
     #[test]
@@ -245,27 +267,18 @@ mod tests {
 
     #[test]
     pub fn test_matmul_tiling_2d_k_bigger_than_bk() {
-        test_with_params::<128, 128, 8, 8, 8, 16, 16>(8, 10, 8, 1, 1);
+        test_with_params::<8, 8, 8, 8, 8, 1, 1>(8, 16, 8, 1, 1);
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_blocks_divide_shapes_unevenly() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_blocks_divide_shapes_unevenly_should_panic() {
         test_with_params::<16, 16, 8, 8, 8, 2, 2>(31, 23, 17, 1, 1);
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_large_parameters() {
-        test_with_params::<256, 256, 16, 16, 16, 16, 16>(40, 40, 40, 1, 1);
-    }
-
-    #[test]
-    pub fn test_matmul_tiling_2d_shapes_slightly_larger_than_blocks() {
-        test_with_params::<32, 32, 8, 8, 8, 4, 4>(40, 40, 30, 1, 1);
-    }
-
-    #[test]
     pub fn test_matmul_tiling_2d_shapes_way_larger_than_blocks() {
-        test_with_params::<16, 16, 8, 8, 8, 2, 2>(50, 50, 50, 1, 1);
+        test_with_params::<16, 16, 8, 8, 8, 2, 2>(48, 48, 48, 1, 1);
     }
 
     #[test]

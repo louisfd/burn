@@ -53,7 +53,7 @@ fn main(
 
     // Calculate the corresponding offsets with support for broadcasting.
     let offset_output = batch * n_rows * n_cols; 
-    var offset_lhs: u32 = skip_row * K; 
+    var offset_lhs: u32 = skip_row * n_rows; 
     var offset_rhs: u32 = skip_col;
 
     let batch_dims = dim - 2u;
@@ -78,25 +78,27 @@ fn main(
         // sm_limit ensures that although there are up to B_M x B_N writes to memory, 
         // shared memories remain B_M x B_K (lhs) or B_K x B_N (rhs)
         // also ensures we do not read out of matrices if M % B_M != 0 or N % B_N != 0
-        let sm_limit = min(B_K, K - k);
 
         // Load data into shared memories
         // Each thread is responsible of loading T_M x T_N values from both lhs and rhs
-        for (var load_index = 0u; load_index < T_M_X_T_N; load_index ++) {
-            let lhs_sm_position = thread_offset + load_index;
-            let block_row = lhs_sm_position / B_K;
-            let block_col = lhs_sm_position % B_K;
-            let lhs_position = offset_lhs + k + block_row * K + block_col;
-            shared_lhs[lhs_sm_position] = lhs[lhs_position];
+        for (var i = 0u; i < T_M; i++) {
+            for (var j = 0u; j < T_N; j++) {
+                let current_row = thread_row + i;
+                let current_col = thread_col + j;
+                
+                if current_col < B_K {
+                    let lhs_sm_position = current_row + current_col * B_M; 
+                    let lhs_position = offset_lhs + current_row + (current_col+k) * n_rows;
+                    shared_lhs[lhs_sm_position] = lhs[lhs_position];
+                }
+                
+                if current_row < B_K {
+                    let rhs_sm_position = current_row * B_N + current_col; 
+                    let rhs_position = offset_rhs + (k + current_row) * n_cols + current_col;
+                    shared_rhs[rhs_sm_position] = rhs[rhs_position];
+                }
+            }
         }
-
-        for (var load_index = 0u; load_index < T_M_X_T_N; load_index ++) {
-            let rhs_sm_position = thread_offset + load_index;
-            let block_row = rhs_sm_position / B_N;
-            let block_col = rhs_sm_position % B_N;
-            let rhs_position = offset_rhs + (k + block_row) * n_cols + block_col;
-            shared_rhs[rhs_sm_position] = rhs[rhs_position];
-        } 
 
 
         workgroupBarrier();
@@ -104,10 +106,10 @@ fn main(
         // Compute intermediate results
         // Results are cumulated in results array and updated at each block
         // Outer loop indicates which subcolumns/subrows to read from shared memories
-        for (var dot_index = 0u; dot_index < sm_limit; dot_index++) {
+        for (var dot_index = 0u; dot_index < B_K; dot_index++) {
             // Load a subcolumn of values from lhs
             for (var tile_index = 0u; tile_index < T_M; tile_index++) {
-                let lhs_sm_position = (thread_row + tile_index) * B_K + dot_index;
+                let lhs_sm_position = thread_row + tile_index + dot_index * B_K;
                 register_M[tile_index] = shared_lhs[lhs_sm_position];
             }
             // Load a subrow of values from rhs
@@ -130,14 +132,9 @@ fn main(
     // Each thread is responsible of writing T_M x T_N results
     for (var res_idx_M = 0u; res_idx_M < T_M; res_idx_M++) {
         for (var res_idx_N = 0u; res_idx_N < T_N; res_idx_N++) {
-            let current_row = row + res_idx_M;
-            let current_col = col + res_idx_N;
-            // Check that we are within the bounds of output matrix
-            if current_row < n_rows && current_col < n_cols { 
-                let result_position = res_idx_M * T_N + res_idx_N;
-                let output_position = offset_output + current_row * n_cols + current_col;
-                output[output_position] = results[result_position];
-            }
+            let result_position = res_idx_M * T_N + res_idx_N;
+            let output_position = offset_output + (row + res_idx_M) * n_cols + col + res_idx_N;;
+            output[output_position] = results[result_position];
         }
     }
 }

@@ -12,11 +12,11 @@ use burn_tensor::Shape;
 const MAX_SHARED_MEMORY_SIZE: usize = 8192;
 
 kernel_wgsl!(
-    MatmulTiling2DV1Raw,
-    "../../template/matmul/blocktiling_2d/v1.wgsl"
+    MatmulTiling2DNoPaddingRaw,
+    "../../template/matmul/blocktiling_2d/no_padding.wgsl"
 );
 
-struct MatmulTiling2D<
+struct MatmulTiling2DNoPadding<
     const B_M: usize,
     const B_N: usize,
     const B_K: usize,
@@ -34,10 +34,11 @@ impl<
         const T_N: usize,
         const WORKGROUP_SIZE_X: usize,
         const WORKGROUP_SIZE_Y: usize,
-    > StaticKernel for MatmulTiling2D<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>
+    > StaticKernel
+    for MatmulTiling2DNoPadding<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>
 {
     fn source_template() -> SourceTemplate {
-        MatmulTiling2DV1Raw::source_template()
+        MatmulTiling2DNoPaddingRaw::source_template()
             .register("b_m", B_M.to_string())
             .register("b_n", B_N.to_string())
             .register("b_k", B_K.to_string())
@@ -91,12 +92,16 @@ pub fn matmul_tiling_2d<
     assert!(B_K <= min(B_M, B_N), "B_K must be smaller than both B_M and B_M, otherwise there won't be enough threads to fill shared memory. ");
     assert!(B_K * max(B_M, B_N) <= MAX_SHARED_MEMORY_SIZE, "B_K x B_M and B_K x B_N must be smaller or equal than 8192, otherwise shared memory limit will be busted. ");
     assert!(
-        WORKGROUP_SIZE_X == f32::ceil(B_M as f32 / T_M as f32) as usize,
-        "Workgroup size x must equal ceil(B_M / T_M)"
+        B_M % T_M == 0 && B_N % T_N == 0,
+        "T_M must divide B_M in this version"
     );
     assert!(
-        WORKGROUP_SIZE_Y == f32::ceil(B_N as f32 / T_N as f32) as usize,
-        "Workgroup size y must equal ceil(B_N / T_N)"
+        WORKGROUP_SIZE_X == B_M / T_M,
+        "Workgroup size x must equal B_M / T_M"
+    );
+    assert!(
+        WORKGROUP_SIZE_Y == B_N / T_N,
+        "Workgroup size y must equal B_N / T_N"
     );
     lhs.assert_is_on_same_device(&rhs);
 
@@ -126,7 +131,7 @@ pub fn matmul_tiling_2d<
     let blocks_needed_in_y = f32::ceil(num_cols as f32 / B_N as f32) as u32;
 
     let kernel = lhs.context.compile_static::<KernelSettings<
-        MatmulTiling2D<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>,
+        MatmulTiling2DNoPadding<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>,
         E,
         i32,
         WORKGROUP_SIZE_X,
@@ -185,7 +190,8 @@ mod tests {
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_t_divides_b_unevenly() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_t_divides_b_unevenly_should_panic() {
         test_with_params::<128, 128, 8, 7, 11, 19, 12>(8, 8, 8, 1, 1);
     }
 
@@ -264,22 +270,26 @@ mod tests {
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_tm_larger_than_bm() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_tm_larger_than_bm_should_panic() {
         test_with_params::<2, 2, 2, 3, 2, 1, 1>(5, 5, 5, 1, 1);
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_tn_larger_than_bn() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_tn_larger_than_bn_should_panic() {
         test_with_params::<2, 2, 2, 2, 3, 1, 1>(5, 5, 5, 1, 1);
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_uneven_parameters() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_uneven_parameters_should_panic() {
         test_with_params::<17, 15, 11, 13, 7, 2, 3>(24, 24, 24, 1, 1);
     }
 
     #[test]
-    pub fn test_matmul_tiling_2d_uneven_parameters_2() {
+    #[should_panic]
+    pub fn test_matmul_tiling_2d_uneven_parameters_2_should_panic() {
         test_with_params::<11, 14, 10, 7, 17, 2, 1>(10, 24, 17, 1, 1);
     }
 

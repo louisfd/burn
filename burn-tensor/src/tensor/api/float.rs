@@ -13,16 +13,6 @@ impl<const D: usize, B> Tensor<B, D>
 where
     B: Backend,
 {
-    /// Converts the tensor into a primitive tensor.
-    pub fn into_primitive(self) -> B::TensorPrimitive<D> {
-        self.primitive
-    }
-
-    /// Converts from a primitive tensor into a tensor.
-    pub fn from_primitive(tensor: B::TensorPrimitive<D>) -> Self {
-        Self::new(tensor)
-    }
-
     /// Executes an operation on the tensor and modifies its value.
     ///
     /// # Notes
@@ -152,7 +142,7 @@ where
         let mut ranges: [core::ops::Range<usize>; D] = ranges.try_into().unwrap();
         ranges[D - 1] = index..index + 1;
 
-        tensor.index_assign(ranges, Tensor::ones(Shape::new([1; D])))
+        tensor.slice_assign(ranges, Tensor::ones(Shape::new([1; D])))
     }
 
     /// Applies the transpose operation.

@@ -3,10 +3,13 @@ use std::cmp::{max, min};
 use crate::{
     context::WorkGroup,
     element::WgpuElement,
-    kernel::{build_info, matmul::padding::pad, KernelSettings, SourceTemplate, StaticKernel},
+    kernel::{
+        build_info,
+        matmul::padding::{crop, pad},
+        KernelSettings, SourceTemplate, StaticKernel,
+    },
     kernel_wgsl,
     tensor::WgpuTensor,
-    WgpuBackend,
 };
 use burn_tensor::Shape;
 
@@ -124,21 +127,17 @@ pub fn matmul_tiling_2d<
             shape_out[index] = usize::max(*dim_lhs, *dim_rhs);
         });
 
+    let final_num_rows = lhs.shape.dims[D - 2];
+    let final_num_cols = rhs.shape.dims[D - 1];
+
+    let lhs = pad(lhs, B_M, B_K);
+    let rhs = pad(rhs, B_K, B_N);
+
     let num_rows = lhs.shape.dims[D - 2];
     let num_cols = rhs.shape.dims[D - 1];
     shape_out[D - 2] = num_rows;
     shape_out[D - 1] = num_cols;
     let shape_out = Shape::new(shape_out);
-
-    // let lhs = pad(lhs, B_M, B_K);
-    // let rhs = pad(rhs, B_K, B_N);
-    // assert!(
-    //     num_rows % B_M == 0 && num_cols % B_N == 0 && lhs.shape.dims[D - 1] % B_K == 0,
-    //     "M, N, K must be divisible by B_M, B_N, B_K respectively in this version. "
-    // );
-
-    // let lhs_t = WgpuBackend::transpose(lhs); TODO
-    let lhs_t = lhs.clone(); // for will never work, and won't even try if not square
 
     let buffer = rhs
         .context
@@ -166,7 +165,7 @@ pub fn matmul_tiling_2d<
         1,
     >>();
 
-    let info = build_info(&[&lhs_t, &rhs, &output]);
+    let info = build_info(&[&lhs, &rhs, &output]);
 
     let info_buffers = rhs
         .context
@@ -182,10 +181,10 @@ pub fn matmul_tiling_2d<
     lhs.context.execute(
         workgroup,
         kernel,
-        &[&lhs_t.buffer, &rhs.buffer, &output.buffer, &info_buffers],
+        &[&lhs.buffer, &rhs.buffer, &output.buffer, &info_buffers],
     );
 
-    output
+    crop(output, final_num_rows, final_num_cols)
 }
 
 #[cfg(test)]
@@ -197,8 +196,7 @@ mod tests {
         burn_tensor::Tensor<burn_ndarray::NdArrayBackend<f32>, D>;
 
     #[test]
-    #[should_panic]
-    pub fn test_matmul_tiling_2d_shapes_smaller_than_blocks_should_panic() {
+    pub fn test_matmul_tiling_2d_shapes_smaller_than_blocks() {
         test_with_params::<128, 128, 16, 8, 8, 16, 16>(8, 8, 8, 1, 1);
     }
 
@@ -278,8 +276,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    pub fn test_matmul_tiling_2d_blocks_divide_shapes_unevenly_should_panic() {
+    pub fn test_matmul_tiling_2d_blocks_divide_shapes_unevenly() {
         test_with_params::<16, 16, 8, 8, 8, 2, 2>(31, 23, 17, 1, 1);
     }
 
@@ -348,7 +345,7 @@ mod tests {
         let x_wgpu = TestTensor::from_data(x.to_data());
         let y_wgpu = TestTensor::from_data(y.to_data());
 
-        let z_reference = x.transpose().matmul(y);
+        let z_reference = x.matmul(y);
 
         let z = func(x_wgpu.into_primitive(), y_wgpu.into_primitive());
         let z = TestTensor::from_primitive(z);

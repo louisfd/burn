@@ -19,11 +19,7 @@ var<storage, read> info: array<u32>;
 fn main(
     @builtin(global_invocation_id) global_id: vec3<u32>
 ) {
-<<<<<<< HEAD:burn-wgpu/src/template/matmul/naive.wgsl
-    // Indexes
-=======
     // Indices
->>>>>>> refactor/index:burn-wgpu/src/template/matmul_naive.wgsl
     let row = global_id.x;
     let col = global_id.y;
     let batch = global_id.z;

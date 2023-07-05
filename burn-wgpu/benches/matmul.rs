@@ -154,8 +154,8 @@ impl<const D: usize, G: GraphicsApi> MatmulFunction<WgpuBackend<G, f32, i32>, D>
 
 fn main() {
     let num_repeats = 10;
-    let batch_size = 3;
-    let matrix_size = 2048;
+    let batch_size = 10;
+    let matrix_size = 1000;
     run_benchmark!(MatmulBenchmark::<NaiveMatmul, 3> {
         shape_lhs: [batch_size, matrix_size, matrix_size].into(),
         shape_rhs: [batch_size, matrix_size, matrix_size].into(),

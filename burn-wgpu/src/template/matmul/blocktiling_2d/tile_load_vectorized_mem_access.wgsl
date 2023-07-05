@@ -53,7 +53,7 @@ fn main(
 
     // Calculate the corresponding offsets with support for broadcasting.
     let offset_output = batch * n_rows * n_cols; 
-    var offset_lhs: u32 = skip_row; 
+    var offset_lhs: u32 = skip_row * K; 
     var offset_rhs: u32 = skip_col;
 
     let batch_dims = dim - 2u;
@@ -88,7 +88,7 @@ fn main(
                 
                 if current_col < B_K {
                     let lhs_sm_position = current_row + current_col * B_M; 
-                    let lhs_position = offset_lhs + current_row + (current_col + k) * n_rows;
+                    let lhs_position = offset_lhs + k + current_row * K + current_col;
                     shared_lhs[lhs_sm_position] = lhs[lhs_position];
                 }
                 

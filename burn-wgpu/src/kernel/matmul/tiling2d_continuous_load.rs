@@ -3,7 +3,11 @@ use std::cmp::{max, min};
 use crate::{
     context::WorkGroup,
     element::WgpuElement,
-    kernel::{build_info, KernelSettings, SourceTemplate, StaticKernel},
+    kernel::{
+        build_info,
+        matmul::padding::{crop, pad},
+        KernelSettings, SourceTemplate, StaticKernel,
+    },
     kernel_wgsl,
     tensor::WgpuTensor,
 };
@@ -116,6 +120,12 @@ pub fn matmul_tiling_2d<
             shape_out[index] = usize::max(*dim_lhs, *dim_rhs);
         });
 
+    let final_num_rows = lhs.shape.dims[D - 2];
+    let final_num_cols = rhs.shape.dims[D - 1];
+
+    let lhs = pad(lhs, B_M, B_K);
+    let rhs = pad(rhs, B_K, B_N);
+
     let num_rows = lhs.shape.dims[D - 2];
     let num_cols = rhs.shape.dims[D - 1];
     shape_out[D - 2] = num_rows;
@@ -164,7 +174,7 @@ pub fn matmul_tiling_2d<
         &[&lhs.buffer, &rhs.buffer, &output.buffer, &info_buffers],
     );
 
-    output
+    crop(output, final_num_rows, final_num_cols)
 }
 
 #[cfg(test)]
@@ -176,8 +186,7 @@ mod tests {
         burn_tensor::Tensor<burn_ndarray::NdArrayBackend<f32>, D>;
 
     #[test]
-    #[should_panic]
-    pub fn test_matmul_tiling_2d_shapes_smaller_than_blocks_should_panic() {
+    pub fn test_matmul_tiling_2d_shapes_smaller_than_blocks() {
         test_with_params::<128, 128, 16, 4, 4, 32, 32>(8, 8, 8, 1, 1);
     }
 
@@ -252,8 +261,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    pub fn test_matmul_tiling_2d_blocks_divide_shapes_unevenly_should_panic() {
+    pub fn test_matmul_tiling_2d_blocks_divide_shapes_unevenly() {
         test_with_params::<16, 16, 8, 2, 2, 8, 8>(31, 23, 17, 1, 1);
     }
 

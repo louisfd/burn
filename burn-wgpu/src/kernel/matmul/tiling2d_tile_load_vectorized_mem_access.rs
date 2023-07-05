@@ -3,7 +3,7 @@ use std::cmp::{max, min};
 use crate::{
     context::WorkGroup,
     element::WgpuElement,
-    kernel::{build_info, KernelSettings, SourceTemplate, StaticKernel},
+    kernel::{build_info, matmul::padding::pad, KernelSettings, SourceTemplate, StaticKernel},
     kernel_wgsl,
     tensor::WgpuTensor,
     WgpuBackend,
@@ -130,10 +130,12 @@ pub fn matmul_tiling_2d<
     shape_out[D - 1] = num_cols;
     let shape_out = Shape::new(shape_out);
 
-    assert!(
-        num_rows % B_M == 0 && num_cols % B_N == 0 && lhs.shape.dims[D - 1] % B_K == 0,
-        "M, N, K must be divisible by B_M, B_N, B_K respectively in this version. "
-    );
+    // let lhs = pad(lhs, B_M, B_K);
+    // let rhs = pad(rhs, B_K, B_N);
+    // assert!(
+    //     num_rows % B_M == 0 && num_cols % B_N == 0 && lhs.shape.dims[D - 1] % B_K == 0,
+    //     "M, N, K must be divisible by B_M, B_N, B_K respectively in this version. "
+    // );
 
     // let lhs_t = WgpuBackend::transpose(lhs); TODO
     let lhs_t = lhs.clone(); // for will never work, and won't even try if not square
@@ -229,6 +231,11 @@ mod tests {
     #[test]
     pub fn test_matmul_tiling_2d_multibatch_1_dim() {
         test_with_params::<8, 8, 8, 8, 8, 1, 1>(8, 8, 8, 3, 1);
+    }
+
+    #[test]
+    pub fn test_matmul_tiling_2d_multiple_tiles_per_block() {
+        test_with_params::<8, 8, 4, 2, 2, 4, 4>(16, 16, 16, 1, 1);
     }
 
     #[test]
@@ -341,12 +348,13 @@ mod tests {
         let x_wgpu = TestTensor::from_data(x.to_data());
         let y_wgpu = TestTensor::from_data(y.to_data());
 
-        let z_reference = x.matmul(y);
+        let z_reference = x.transpose().matmul(y);
 
         let z = func(x_wgpu.into_primitive(), y_wgpu.into_primitive());
         let z = TestTensor::from_primitive(z);
 
         println!("{z}");
+        println!("{z_reference}");
         z_reference.into_data().assert_approx_eq(&z.into_data(), 3);
     }
 }

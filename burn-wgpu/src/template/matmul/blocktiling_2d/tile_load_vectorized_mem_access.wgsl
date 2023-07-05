@@ -53,7 +53,7 @@ fn main(
 
     // Calculate the corresponding offsets with support for broadcasting.
     let offset_output = batch * n_rows * n_cols; 
-    var offset_lhs: u32 = skip_row * n_rows; 
+    var offset_lhs: u32 = skip_row; 
     var offset_rhs: u32 = skip_col;
 
     let batch_dims = dim - 2u;
@@ -88,7 +88,7 @@ fn main(
                 
                 if current_col < B_K {
                     let lhs_sm_position = current_row + current_col * B_M; 
-                    let lhs_position = offset_lhs + current_row + (current_col+k) * n_rows;
+                    let lhs_position = offset_lhs + current_row + (current_col + k) * n_rows;
                     shared_lhs[lhs_sm_position] = lhs[lhs_position];
                 }
                 
@@ -109,7 +109,7 @@ fn main(
         for (var dot_index = 0u; dot_index < B_K; dot_index++) {
             // Load a subcolumn of values from lhs
             for (var tile_index = 0u; tile_index < T_M; tile_index++) {
-                let lhs_sm_position = thread_row + tile_index + dot_index * B_K;
+                let lhs_sm_position = thread_row + tile_index + dot_index * B_M;
                 register_M[tile_index] = shared_lhs[lhs_sm_position];
             }
             // Load a subrow of values from rhs

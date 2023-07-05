@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use burn_tensor::{backend::Backend, Distribution, Shape, Tensor};
+use burn_tensor::{backend::Backend, ops::TensorOps, Distribution, Shape, Tensor};
 use burn_wgpu::{
     benchmark::Benchmark,
     kernel::{

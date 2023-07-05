@@ -3,9 +3,10 @@ use std::cmp::{max, min};
 use crate::{
     context::WorkGroup,
     element::WgpuElement,
-    kernel::{build_info, KernelSettings, SourceTemplate, StaticKernel},
+    kernel::{build_info, matmul::padding::pad, KernelSettings, SourceTemplate, StaticKernel},
     kernel_wgsl,
     tensor::WgpuTensor,
+    GraphicsApi,
 };
 use burn_tensor::Shape;
 
@@ -51,7 +52,7 @@ impl<
 }
 
 /// Matrix multiplication using tiling 2D algorithm with default parameters
-pub fn matmul_tiling_2d_default<E: WgpuElement, const D: usize>(
+pub fn matmul_tiling_2d_default<G: GraphicsApi, E: WgpuElement, const D: usize>(
     lhs: WgpuTensor<E, D>,
     rhs: WgpuTensor<E, D>,
 ) -> WgpuTensor<E, D> {
@@ -71,11 +72,14 @@ pub fn matmul_tiling_2d_default<E: WgpuElement, const D: usize>(
     // WORKGROUP_SIZE_Y = ceil(B_N / T_N)
     const WORKGROUP_SIZE_Y: usize = B_N / T_N;
 
-    matmul_tiling_2d::<E, D, B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>(lhs, rhs)
+    matmul_tiling_2d::<G, E, D, B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>(
+        lhs, rhs,
+    )
 }
 
 /// Matrix multiplication using tiling 2D algorithm with custom parameters
 pub fn matmul_tiling_2d<
+    G: GraphicsApi,
     E: WgpuElement,
     const D: usize,
     const B_M: usize,
@@ -121,10 +125,8 @@ pub fn matmul_tiling_2d<
     shape_out[D - 1] = num_cols;
     let shape_out = Shape::new(shape_out);
 
-    assert!(
-        num_rows % B_M == 0 && num_cols % B_N == 0 && lhs.shape.dims[D - 1] % B_K == 0,
-        "M, N, K must be divisible by B_M, B_N, B_K respectively in this version. "
-    );
+    let lhs = pad::<G, E, D>(lhs, B_M, B_K);
+    let rhs = pad::<G, E, D>(rhs, B_K, B_N);
 
     let buffer = lhs
         .context

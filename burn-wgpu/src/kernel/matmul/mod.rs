@@ -1,5 +1,6 @@
 mod mem_coalescing;
 mod naive;
+mod padding;
 mod tiling2d;
 
 pub use mem_coalescing::*;

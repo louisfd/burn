@@ -1,26 +1,18 @@
-use std::cmp::{max, min};
-
 use crate::{
-    context::WorkGroup,
     element::WgpuElement,
-    kernel::{
-        build_info,
-        matmul::padding::{crop, pad_divisible},
-        KernelSettings, SourceTemplate, StaticKernel,
-    },
+    kernel::{KernelSettings, SourceTemplate, StaticKernel},
     kernel_wgsl,
     tensor::WgpuTensor,
 };
-use burn_tensor::Shape;
 
-const MAX_SHARED_MEMORY_SIZE: usize = 8192;
+use super::base::{matmul_tiling_2d_launch, register_template};
 
 kernel_wgsl!(
-    MatmulTiling2DTileLoadVectorizedMemAccessRaw,
-    "../../template/matmul/blocktiling_2d/tile_load_vectorized_mem_access.wgsl"
+    MatmulTiling2DTileVectorizedRaw,
+    "../../template/matmul/blocktiling_2d/tile_vectorized.wgsl"
 );
 
-struct MatmulTiling2DTileLoadVectorizedMemAccess<
+struct MatmulTiling2DTileVectorized<
     const B_M: usize,
     const B_N: usize,
     const B_K: usize,
@@ -39,26 +31,12 @@ impl<
         const WORKGROUP_SIZE_X: usize,
         const WORKGROUP_SIZE_Y: usize,
     > StaticKernel
-    for MatmulTiling2DTileLoadVectorizedMemAccess<
-        B_M,
-        B_N,
-        B_K,
-        T_M,
-        T_N,
-        WORKGROUP_SIZE_X,
-        WORKGROUP_SIZE_Y,
-    >
+    for MatmulTiling2DTileVectorized<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>
 {
     fn source_template() -> SourceTemplate {
-        MatmulTiling2DTileLoadVectorizedMemAccessRaw::source_template()
-            .register("b_m", B_M.to_string())
-            .register("b_n", B_N.to_string())
-            .register("b_k", B_K.to_string())
-            .register("bm_x_bk", (B_M * B_K).to_string())
-            .register("bk_x_bn", (B_K * B_N).to_string())
-            .register("t_m", T_M.to_string())
-            .register("t_n", T_N.to_string())
-            .register("tm_x_tn", (T_M * T_N).to_string())
+        register_template::<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>(
+            MatmulTiling2DTileVectorizedRaw::source_template(),
+        )
     }
 }
 
@@ -101,95 +79,23 @@ pub fn matmul_tiling_2d<
     lhs: WgpuTensor<E, D>,
     rhs: WgpuTensor<E, D>,
 ) -> WgpuTensor<E, D> {
-    assert!(B_K <= min(B_M, B_N), "B_K must be smaller than both B_M and B_M, otherwise there won't be enough threads to fill shared memory. ");
-    assert!(B_K * max(B_M, B_N) <= MAX_SHARED_MEMORY_SIZE, "B_K x B_M and B_K x B_N must be smaller or equal than 8192, otherwise shared memory limit will be busted. ");
-    assert!(
-        B_M % T_M == 0 && B_N % T_N == 0,
-        "T_M must divide B_M in this version"
-    );
-    assert!(
-        WORKGROUP_SIZE_X == B_M / T_M,
-        "Workgroup size x must equal B_M / T_M"
-    );
-    assert!(
-        WORKGROUP_SIZE_Y == B_N / T_N,
-        "Workgroup size y must equal B_N / T_N"
-    );
-    lhs.assert_is_on_same_device(&rhs);
-
-    ///
-    let mut shape_out = [0; D];
-    lhs.shape
-        .dims
-        .iter()
-        .zip(rhs.shape.dims.iter())
-        .enumerate()
-        .for_each(|(index, (dim_lhs, dim_rhs))| {
-            shape_out[index] = usize::max(*dim_lhs, *dim_rhs);
-        });
-
-    let final_num_rows = lhs.shape.dims[D - 2];
-    let final_num_cols = rhs.shape.dims[D - 1];
-
-    let lhs = pad_divisible(lhs, B_M, B_K);
-    let rhs = pad_divisible(rhs, B_K, B_N);
-
-    let num_rows = lhs.shape.dims[D - 2];
-    let num_cols = rhs.shape.dims[D - 1];
-    shape_out[D - 2] = num_rows;
-    shape_out[D - 1] = num_cols;
-    let shape_out = Shape::new(shape_out);
-    ///
-    let buffer = rhs
-        .context
-        .create_buffer(shape_out.num_elements() * core::mem::size_of::<E>());
-    let output = WgpuTensor::new(rhs.context.clone(), shape_out, buffer);
-
-    // set number of workgroups
-    let blocks_needed_in_x = f32::ceil(num_rows as f32 / B_M as f32) as u32;
-    let blocks_needed_in_y = f32::ceil(num_cols as f32 / B_N as f32) as u32;
-
     let kernel = rhs.context.compile_static::<KernelSettings<
-        MatmulTiling2DTileLoadVectorizedMemAccess<
-            B_M,
-            B_N,
-            B_K,
-            T_M,
-            T_N,
-            WORKGROUP_SIZE_X,
-            WORKGROUP_SIZE_Y,
-        >,
+        MatmulTiling2DTileVectorized<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>,
         E,
         i32,
         WORKGROUP_SIZE_X,
         WORKGROUP_SIZE_Y,
         1,
     >>();
-
-    let info = build_info(&[&lhs, &rhs, &output]);
-
-    let info_buffers = rhs
-        .context
-        .create_buffer_with_data(bytemuck::cast_slice(&info));
-
-    let mut num_iter = 1;
-    for i in 0..D - 2 {
-        num_iter *= output.shape.dims[i];
-    }
-
-    let workgroup = WorkGroup::new(blocks_needed_in_x, blocks_needed_in_y, num_iter as u32);
-
-    lhs.context.execute(
-        workgroup,
-        kernel,
-        &[&lhs.buffer, &rhs.buffer, &output.buffer, &info_buffers],
-    );
-
-    crop(output, final_num_rows, final_num_cols)
+    matmul_tiling_2d_launch::<E, D, B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>(
+        lhs, rhs, kernel,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use burn_tensor::Shape;
+
     use super::*;
     use crate::tests::TestTensor;
 

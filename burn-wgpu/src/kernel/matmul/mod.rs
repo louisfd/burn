@@ -1,3 +1,4 @@
+mod base;
 mod mem_coalescing;
 mod naive;
 mod padding;

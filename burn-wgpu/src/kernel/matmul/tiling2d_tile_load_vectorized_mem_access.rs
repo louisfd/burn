@@ -5,7 +5,7 @@ use crate::{
     element::WgpuElement,
     kernel::{
         build_info,
-        matmul::padding::{crop, pad},
+        matmul::padding::{crop, pad_divisible},
         KernelSettings, SourceTemplate, StaticKernel,
     },
     kernel_wgsl,
@@ -131,8 +131,8 @@ pub fn matmul_tiling_2d<
     let final_num_rows = lhs.shape.dims[D - 2];
     let final_num_cols = rhs.shape.dims[D - 1];
 
-    let lhs = pad(lhs, B_M, B_K);
-    let rhs = pad(rhs, B_K, B_N);
+    let lhs = pad_divisible(lhs, B_M, B_K);
+    let rhs = pad_divisible(rhs, B_K, B_N);
 
     let num_rows = lhs.shape.dims[D - 2];
     let num_cols = rhs.shape.dims[D - 1];
@@ -140,7 +140,6 @@ pub fn matmul_tiling_2d<
     shape_out[D - 1] = num_cols;
     let shape_out = Shape::new(shape_out);
     ///
-
     let buffer = rhs
         .context
         .create_buffer(shape_out.num_elements() * core::mem::size_of::<E>());

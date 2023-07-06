@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use burn_tensor::Shape;
 
 use crate::{
@@ -6,39 +8,34 @@ use crate::{
     tensor::WgpuTensor,
 };
 
-/// 
-pub(super) fn pad<E: WgpuElement, const D: usize>(
+use super::base::empty_from_context;
+
+/// Pads tensor with zeros to make tensor number of rows and columns
+/// divisible by some quantity.
+/// For instance tensor of shape [1000, 1000] with divisors 64 and 64
+/// will be padded to [1024, 1024] with the last 24 elements being zeros
+pub(super) fn pad_divisible<E: WgpuElement, const D: usize>(
     tensor: WgpuTensor<E, D>,
-    row_modulo: usize,
-    col_modulo: usize,
+    row_divisor: usize,
+    col_divisor: usize,
 ) -> WgpuTensor<E, D> {
-    if tensor.shape.dims[D - 2] % row_modulo == 0 && tensor.shape.dims[D - 1] % col_modulo == 0 {
+    let row_modulo = tensor.shape.dims[D - 2] % row_divisor;
+    let col_modulo = tensor.shape.dims[D - 1] % col_divisor;
+    if row_modulo == 0 && col_modulo == 0 {
         return tensor;
     }
-    let mut padded_dims = Vec::with_capacity(D);
-    let mut ranges = Vec::with_capacity(D);
+    let mut padded_shape = Vec::with_capacity(D);
     for i in 0..D - 2 {
-        let batch = tensor.shape.dims[i];
-        padded_dims.push(batch);
-        ranges.push(0..batch);
+        padded_shape.push(tensor.shape.dims[i]);
     }
-    let row = tensor.shape.dims[D - 2];
-    let col = tensor.shape.dims[D - 1];
-    padded_dims.push(((row - 1) / row_modulo + 1) * row_modulo);
-    padded_dims.push(((col - 1) / col_modulo + 1) * col_modulo);
-    ranges.push(0..row);
-    ranges.push(0..col);
-
-    let shape_out: Shape<D> = padded_dims.into();
-    let buffer = tensor
-        .context
-        .create_buffer(shape_out.num_elements() * core::mem::size_of::<E>());
-
-    let padded = WgpuTensor::new(tensor.context.clone(), shape_out, buffer);
-    slice_assign::<E, D, D>(padded, ranges.try_into().unwrap(), tensor)
+    padded_shape.push(tensor.shape.dims[D - 2] - row_modulo + row_divisor);
+    padded_shape.push(tensor.shape.dims[D - 1] - col_modulo + col_divisor);
+    padding::<E, D>(tensor, padded_shape.into())
 }
 
-/// TODO
+/// Crops tensor to specified number of rows and columns.
+/// For instance tensor of shape [1024, 1024] with keep_rows and keep_cols 1000
+/// will be cropped to [1000, 1000] with the last 24 elements being deleted
 pub(super) fn crop<E: WgpuElement, const D: usize>(
     tensor: WgpuTensor<E, D>,
     keep_rows: usize,
@@ -47,19 +44,47 @@ pub(super) fn crop<E: WgpuElement, const D: usize>(
     if tensor.shape.dims[D - 2] <= keep_rows && tensor.shape.dims[D - 1] <= keep_cols {
         return tensor;
     }
-    let mut unpadded_dims = Vec::with_capacity(D);
-    let mut ranges = Vec::with_capacity(D);
+    let mut cropped_shape = Vec::with_capacity(D);
     for i in 0..D - 2 {
-        let batch = tensor.shape.dims[i];
-        unpadded_dims.push(batch);
-        ranges.push(0..batch);
+        cropped_shape.push(tensor.shape.dims[i]);
     }
-    unpadded_dims.push(keep_rows);
-    unpadded_dims.push(keep_cols);
-    ranges.push(0..keep_rows);
-    ranges.push(0..keep_cols);
+    cropped_shape.push(keep_rows);
+    cropped_shape.push(keep_cols);
+    cropping(tensor, cropped_shape.into())
+}
 
-    slice::<E, D, D>(tensor, ranges.try_into().unwrap())
+/// Pads tensor by adding zeros when padded dim is larger than tensor dim
+fn padding<E: WgpuElement, const D: usize>(
+    tensor: WgpuTensor<E, D>,
+    padded_shape: Shape<D>,
+) -> WgpuTensor<E, D> {
+    let ranges = padded_shape
+        .dims
+        .iter()
+        .map(|dim| 0..*dim)
+        .collect::<Vec<Range<usize>>>()
+        .try_into()
+        .unwrap();
+    slice_assign::<E, D, D>(
+        empty_from_context(tensor.context.clone(), padded_shape),
+        ranges,
+        tensor,
+    )
+}
+
+/// Crops tensor by deleting values when cropped dim is smaller than tensor dim
+fn cropping<E: WgpuElement, const D: usize>(
+    tensor: WgpuTensor<E, D>,
+    cropped_shape: Shape<D>,
+) -> WgpuTensor<E, D> {
+    let ranges = cropped_shape
+        .dims
+        .iter()
+        .map(|dim| 0..*dim)
+        .collect::<Vec<Range<usize>>>()
+        .try_into()
+        .unwrap();
+    slice::<E, D, D>(tensor, ranges)
 }
 
 #[cfg(test)]
@@ -70,13 +95,13 @@ mod tests {
     #[test]
     fn padding_already_round_should_have_same_shape() {
         let row = 10;
-        let row_modulo = 5;
+        let row_divisor = 5;
         let col = 12;
-        let col_modulo = 3;
+        let col_divisor = 3;
         let tensor = TestTensor::random([row, col], burn_tensor::Distribution::Standard);
         let expected_shape = [row, col].into();
 
-        let padded = pad(tensor.into_primitive(), row_modulo, col_modulo);
+        let padded = pad_divisible(tensor.into_primitive(), row_divisor, col_divisor);
 
         assert!(padded.shape == expected_shape);
     }
@@ -84,12 +109,12 @@ mod tests {
     #[test]
     fn padding_already_round_should_have_same_values() {
         let row = 10;
-        let row_modulo = 5;
+        let row_divisor = 5;
         let col = 12;
-        let col_modulo = 3;
+        let col_divisor = 3;
         let tensor = TestTensor::random([row, col], burn_tensor::Distribution::Standard);
 
-        let padded = pad(tensor.clone().into_primitive(), row_modulo, col_modulo);
+        let padded = pad_divisible(tensor.clone().into_primitive(), row_divisor, col_divisor);
 
         let padded = TestTensor::from_primitive(padded);
         padded.into_data().assert_approx_eq(&tensor.into_data(), 3);
@@ -98,13 +123,13 @@ mod tests {
     #[test]
     fn padding_not_round_should_have_rounded_shape() {
         let row = 10;
-        let row_modulo = 6;
+        let row_divisor = 6;
         let col = 12;
-        let col_modulo = 5;
+        let col_divisor = 5;
         let tensor = TestTensor::random([row, col], burn_tensor::Distribution::Standard);
         let expected_shape = [12, 15].into();
 
-        let padded = pad(tensor.into_primitive(), row_modulo, col_modulo);
+        let padded = pad_divisible(tensor.into_primitive(), row_divisor, col_divisor);
 
         assert!(padded.shape == expected_shape);
     }
@@ -112,12 +137,12 @@ mod tests {
     #[test]
     fn padding_not_round_should_have_same_values() {
         let row = 10;
-        let row_modulo = 6;
+        let row_divisor = 6;
         let col = 12;
-        let col_modulo = 5;
+        let col_divisor = 5;
         let tensor = TestTensor::random([row, col], burn_tensor::Distribution::Standard);
 
-        let padded = pad(tensor.clone().into_primitive(), row_modulo, col_modulo);
+        let padded = pad_divisible(tensor.clone().into_primitive(), row_divisor, col_divisor);
 
         let padded = TestTensor::from_primitive(padded).to_data();
         let tensor = tensor.into_data();
@@ -131,12 +156,12 @@ mod tests {
     #[test]
     fn padding_not_round_should_have_zero_padding() {
         let row = 10;
-        let row_modulo = 6;
+        let row_divisor = 6;
         let col = 12;
-        let col_modulo = 5;
+        let col_divisor = 5;
         let tensor = TestTensor::random([row, col], burn_tensor::Distribution::Standard);
 
-        let padded = pad(tensor.clone().into_primitive(), row_modulo, col_modulo);
+        let padded = pad_divisible(tensor.clone().into_primitive(), row_divisor, col_divisor);
         let padded = TestTensor::from_primitive(padded).to_data();
 
         // check right of matrix
@@ -156,13 +181,13 @@ mod tests {
     #[test]
     fn padding_works_with_batch() {
         let row = 10;
-        let row_modulo = 4;
+        let row_divisor = 4;
         let col = 12;
-        let col_modulo = 5;
+        let col_divisor = 5;
         let tensor = TestTensor::random([2, 3, row, col], burn_tensor::Distribution::Standard);
         let expected_shape = [2, 3, 12, 15].into();
 
-        let padded = pad(tensor.into_primitive(), row_modulo, col_modulo);
+        let padded = pad_divisible(tensor.into_primitive(), row_divisor, col_divisor);
 
         assert!(padded.shape == expected_shape);
     }

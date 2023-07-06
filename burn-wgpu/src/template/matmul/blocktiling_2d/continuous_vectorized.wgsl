@@ -75,16 +75,12 @@ fn main(
     let thread_offset = local_idx * T_M_X_T_N;
 
     for (var k = 0u; k < K; k += B_K) {
-        // sm_limit ensures that although there are up to B_M x B_N writes to memory, 
-        // shared memories remain B_M x B_K (lhs) or B_K x B_N (rhs)
-        // also ensures we do not read out of matrices if M % B_M != 0 or N % B_N != 0
-
-        // Load data into shared memories
-        // Each thread is responsible of loading T_M x T_N values from both lhs and rhs
+        // tile:     let lhs_sm_position = current_row * B_K + current_col; 
+        // tile_vec: let lhs_sm_position = current_row + current_col * B_M; 
         for (var load_index = 0u; load_index < T_M_X_T_N; load_index ++) {
             let lhs_sm_position = thread_offset + load_index;
-            let block_row = lhs_sm_position / B_K;
-            let block_col = lhs_sm_position % B_K;
+            let block_row = lhs_sm_position % B_M;
+            let block_col = lhs_sm_position / B_M;
             let lhs_position = offset_lhs + k + block_row * K + block_col;
             shared_lhs[lhs_sm_position] = lhs[lhs_position];
         }
@@ -105,7 +101,7 @@ fn main(
         for (var dot_index = 0u; dot_index < B_K; dot_index++) {
             // Load a subcolumn of values from lhs
             for (var tile_index = 0u; tile_index < T_M; tile_index++) {
-                let lhs_sm_position = (thread_row + tile_index) * B_K + dot_index;
+                let lhs_sm_position = thread_row + tile_index + dot_index * B_M;
                 register_M[tile_index] = shared_lhs[lhs_sm_position];
             }
             // Load a subrow of values from rhs
@@ -128,12 +124,9 @@ fn main(
     // Each thread is responsible of writing T_M x T_N results
     for (var res_idx_M = 0u; res_idx_M < T_M; res_idx_M++) {
         for (var res_idx_N = 0u; res_idx_N < T_N; res_idx_N++) {
-            let current_row = row + res_idx_M;
-            let current_col = col + res_idx_N;
-            // Check that we are within the bounds of output matrix
-                let result_position = res_idx_M * T_N + res_idx_N;
-                let output_position = offset_output + current_row * n_cols + current_col;
-                output[output_position] = results[result_position];
+            let result_position = res_idx_M * T_N + res_idx_N;
+            let output_position = offset_output + (row + res_idx_M) * n_cols + col + res_idx_N;;
+            output[output_position] = results[result_position];
         }
     }
 }

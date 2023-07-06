@@ -75,12 +75,6 @@ fn main(
     let thread_offset = local_idx * T_M_X_T_N;
 
     for (var k = 0u; k < K; k += B_K) {
-        // sm_limit ensures that although there are up to B_M x B_N writes to memory, 
-        // shared memories remain B_M x B_K (lhs) or B_K x B_N (rhs)
-        // also ensures we do not read out of matrices if M % B_M != 0 or N % B_N != 0
-
-        // Load data into shared memories
-        // Each thread is responsible of loading T_M x T_N values from both lhs and rhs
         for (var load_index = 0u; load_index < T_M_X_T_N; load_index ++) {
             let lhs_sm_position = thread_offset + load_index;
             let block_row = lhs_sm_position / B_K;

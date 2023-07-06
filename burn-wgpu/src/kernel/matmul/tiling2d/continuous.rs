@@ -9,7 +9,7 @@ use super::base::{matmul_tiling_2d_launch, register_template};
 
 kernel_wgsl!(
     MatmulTiling2DContinuousRaw,
-    "../../template/matmul/blocktiling_2d/continuous.wgsl"
+    "../../../template/matmul/blocktiling_2d/continuous.wgsl"
 );
 
 struct MatmulTiling2DContinuous<

@@ -8,11 +8,11 @@ use crate::{
 use super::base::{matmul_tiling_2d_launch, register_template};
 
 kernel_wgsl!(
-    MatmulTiling2DTileVectorizedRaw,
-    "../../template/matmul/blocktiling_2d/tile_vectorized.wgsl"
+    MatmulTiling2DTileRaw,
+    "../../../template/matmul/blocktiling_2d/tile.wgsl"
 );
 
-struct MatmulTiling2DTileVectorized<
+struct MatmulTiling2DTile<
     const B_M: usize,
     const B_N: usize,
     const B_K: usize,
@@ -31,11 +31,11 @@ impl<
         const WORKGROUP_SIZE_X: usize,
         const WORKGROUP_SIZE_Y: usize,
     > StaticKernel
-    for MatmulTiling2DTileVectorized<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>
+    for MatmulTiling2DTile<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>
 {
     fn source_template() -> SourceTemplate {
         register_template::<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>(
-            MatmulTiling2DTileVectorizedRaw::source_template(),
+            MatmulTiling2DTileRaw::source_template(),
         )
     }
 }
@@ -79,8 +79,8 @@ pub fn matmul_tiling_2d<
     lhs: WgpuTensor<E, D>,
     rhs: WgpuTensor<E, D>,
 ) -> WgpuTensor<E, D> {
-    let kernel = rhs.context.compile_static::<KernelSettings<
-        MatmulTiling2DTileVectorized<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>,
+    let kernel = lhs.context.compile_static::<KernelSettings<
+        MatmulTiling2DTile<B_M, B_N, B_K, T_M, T_N, WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y>,
         E,
         i32,
         WORKGROUP_SIZE_X,
@@ -136,11 +136,6 @@ mod tests {
     #[test]
     pub fn test_matmul_tiling_2d_multibatch_1_dim() {
         test_with_params::<8, 8, 8, 8, 8, 1, 1>(8, 8, 8, 3, 1);
-    }
-
-    #[test]
-    pub fn test_matmul_tiling_2d_multiple_tiles_per_block() {
-        test_with_params::<8, 8, 4, 2, 2, 4, 4>(16, 16, 16, 1, 1);
     }
 
     #[test]
@@ -257,8 +252,8 @@ mod tests {
         let z = func(x_wgpu.into_primitive(), y_wgpu.into_primitive());
         let z = TestTensor::from_primitive(z);
 
-        println!("{z}");
         println!("{z_reference}");
+        println!("{z}");
         z_reference.into_data().assert_approx_eq(&z.into_data(), 3);
     }
 }

@@ -221,6 +221,7 @@ async fn select_device<G: GraphicsApi>(device: &WgpuDevice) -> (wgpu::Device, wg
     let adapter = select_adapter::<G>(device);
     let limits = wgpu::Limits {
         max_compute_invocations_per_workgroup: 1024,
+        max_buffer_size: usize::pow(8, 11) as u64,
         ..wgpu::Limits::default()
     };
 

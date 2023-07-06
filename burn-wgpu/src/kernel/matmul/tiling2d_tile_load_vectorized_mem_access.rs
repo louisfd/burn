@@ -117,6 +117,7 @@ pub fn matmul_tiling_2d<
     );
     lhs.assert_is_on_same_device(&rhs);
 
+    ///
     let mut shape_out = [0; D];
     lhs.shape
         .dims
@@ -138,6 +139,7 @@ pub fn matmul_tiling_2d<
     shape_out[D - 2] = num_rows;
     shape_out[D - 1] = num_cols;
     let shape_out = Shape::new(shape_out);
+    ///
 
     let buffer = rhs
         .context

@@ -6,7 +6,8 @@ use crate::{
     tensor::WgpuTensor,
 };
 
-pub fn pad<E: WgpuElement, const D: usize>(
+/// 
+pub(super) fn pad<E: WgpuElement, const D: usize>(
     tensor: WgpuTensor<E, D>,
     row_modulo: usize,
     col_modulo: usize,
@@ -14,12 +15,12 @@ pub fn pad<E: WgpuElement, const D: usize>(
     if tensor.shape.dims[D - 2] % row_modulo == 0 && tensor.shape.dims[D - 1] % col_modulo == 0 {
         return tensor;
     }
-    let mut padded_dims = Vec::new();
-    let mut ranges = Vec::new();
+    let mut padded_dims = Vec::with_capacity(D);
+    let mut ranges = Vec::with_capacity(D);
     for i in 0..D - 2 {
         let batch = tensor.shape.dims[i];
         padded_dims.push(batch);
-        ranges.push(0..batch)
+        ranges.push(0..batch);
     }
     let row = tensor.shape.dims[D - 2];
     let col = tensor.shape.dims[D - 1];
@@ -37,7 +38,8 @@ pub fn pad<E: WgpuElement, const D: usize>(
     slice_assign::<E, D, D>(padded, ranges.try_into().unwrap(), tensor)
 }
 
-pub fn crop<E: WgpuElement, const D: usize>(
+/// TODO
+pub(super) fn crop<E: WgpuElement, const D: usize>(
     tensor: WgpuTensor<E, D>,
     keep_rows: usize,
     keep_cols: usize,
@@ -45,12 +47,12 @@ pub fn crop<E: WgpuElement, const D: usize>(
     if tensor.shape.dims[D - 2] <= keep_rows && tensor.shape.dims[D - 1] <= keep_cols {
         return tensor;
     }
-    let mut unpadded_dims = Vec::new();
-    let mut ranges = Vec::new();
+    let mut unpadded_dims = Vec::with_capacity(D);
+    let mut ranges = Vec::with_capacity(D);
     for i in 0..D - 2 {
         let batch = tensor.shape.dims[i];
         unpadded_dims.push(batch);
-        ranges.push(0..batch)
+        ranges.push(0..batch);
     }
     unpadded_dims.push(keep_rows);
     unpadded_dims.push(keep_cols);

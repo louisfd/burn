@@ -41,7 +41,7 @@ where
     }
 
     fn num_samples(&self) -> usize {
-        10
+        3
     }
 
     fn execute(&self, (lhs, rhs): Self::Args) {
@@ -57,6 +57,8 @@ where
         (lhs, rhs)
     }
 }
+
+/// TODO MACRO
 
 struct NaiveMatmul;
 
@@ -153,33 +155,33 @@ impl<const D: usize, G: GraphicsApi> MatmulFunction<WgpuBackend<G, f32, i32>, D>
 }
 
 fn main() {
-    let num_repeats = 10;
-    let batch_size = 10;
-    let matrix_size = 1000;
-    run_benchmark!(MatmulBenchmark::<NaiveMatmul, 3> {
-        shape_lhs: [batch_size, matrix_size, matrix_size].into(),
-        shape_rhs: [batch_size, matrix_size, matrix_size].into(),
-        num_repeats,
-        matmul: PhantomData::default()
-    });
+    let num_repeats = 3;
+    let batch_size = 3;
+    let matrix_size = 4096;
+    // run_benchmark!(MatmulBenchmark::<NaiveMatmul, 3> {
+    //     shape_lhs: [batch_size, matrix_size, matrix_size].into(),
+    //     shape_rhs: [batch_size, matrix_size, matrix_size].into(),
+    //     num_repeats,
+    //     matmul: PhantomData::default()
+    // });
     run_benchmark!(MatmulBenchmark::<MemCoalescingMatmul, 3> {
         shape_lhs: [batch_size, matrix_size, matrix_size].into(),
         shape_rhs: [batch_size, matrix_size, matrix_size].into(),
         num_repeats,
         matmul: PhantomData::default()
     });
-    run_benchmark!(MatmulBenchmark::<Tiling2DMatmulNoPadding, 3> {
-        shape_lhs: [batch_size, matrix_size, matrix_size].into(),
-        shape_rhs: [batch_size, matrix_size, matrix_size].into(),
-        num_repeats,
-        matmul: PhantomData::default()
-    });
-    run_benchmark!(MatmulBenchmark::<Tiling2DMatmulContinuousLoad, 3> {
-        shape_lhs: [batch_size, matrix_size, matrix_size].into(),
-        shape_rhs: [batch_size, matrix_size, matrix_size].into(),
-        num_repeats,
-        matmul: PhantomData::default()
-    });
+    // run_benchmark!(MatmulBenchmark::<Tiling2DMatmulNoPadding, 3> {
+    //     shape_lhs: [batch_size, matrix_size, matrix_size].into(),
+    //     shape_rhs: [batch_size, matrix_size, matrix_size].into(),
+    //     num_repeats,
+    //     matmul: PhantomData::default()
+    // });
+    // run_benchmark!(MatmulBenchmark::<Tiling2DMatmulContinuousLoad, 3> {
+    //     shape_lhs: [batch_size, matrix_size, matrix_size].into(),
+    //     shape_rhs: [batch_size, matrix_size, matrix_size].into(),
+    //     num_repeats,
+    //     matmul: PhantomData::default()
+    // });
     run_benchmark!(MatmulBenchmark::<Tiling2DMatmulTileLoad, 3> {
         shape_lhs: [batch_size, matrix_size, matrix_size].into(),
         shape_rhs: [batch_size, matrix_size, matrix_size].into(),
